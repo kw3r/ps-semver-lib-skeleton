@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Assemble & Upload to Project Sylvanas
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout (full history for tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect and sort tags
+        id: tags
+        run: |
+          # Get all tags, strip optional v prefix, sort by semver
+          TAGS=$(git tag -l | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n)
+
+          if [ -z "$TAGS" ]; then
+            echo "::error::No tags found"
+            exit 1
+          fi
+
+          echo "Found tags:"
+          echo "$TAGS"
+
+          # Latest = last line after semver sort
+          LATEST=$(echo "$TAGS" | tail -1)
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Latest version: $LATEST"
+
+      - name: Assemble versions
+        run: |
+          mkdir -p versions
+
+          for RAW_TAG in $(git tag -l); do
+            # Strip optional v prefix for folder name
+            VER=$(echo "$RAW_TAG" | sed 's/^v//')
+            echo "Assembling version $VER from tag $RAW_TAG..."
+
+            mkdir -p "versions/$VER"
+
+            # Extract src/init.lua from that tag into the version folder
+            git show "$RAW_TAG:src/init.lua" > "versions/$VER/init.lua"
+          done
+
+          echo "Assembled versions:"
+          ls -R versions/
+
+      - name: Generate versions/index.lua
+        env:
+          LATEST: ${{ steps.tags.outputs.latest }}
+        run: |
+          {
+            echo 'return {'
+            echo "    latest = \"$LATEST\","
+            echo '    versions = {'
+
+            for DIR in versions/*/; do
+              VER=$(basename "$DIR")
+              # Skip index.lua itself
+              [ "$VER" = "index.lua" ] && continue
+              echo "        [\"$VER\"] = true,"
+            done
+
+            echo '    }'
+            echo '}'
+          } > versions/index.lua
+
+          echo "Generated index:"
+          cat versions/index.lua
+
+      - name: Inject version into header
+        env:
+          LATEST: ${{ steps.tags.outputs.latest }}
+        run: |
+          sed -i "s/version = \"dev\"/version = \"$LATEST\"/" header.lua
+          echo "Injected version: $LATEST"
+          grep version header.lua
+
+      - name: Package plugin
+        run: |
+          zip -r plugin.zip header.lua main.lua versions/
+          echo "Package size: $(du -h plugin.zip | cut -f1)"
+          echo "Package contents:"
+          unzip -l plugin.zip
+
+      - name: Login to Sylvanas
+        id: login
+        env:
+          SYLVANAS_USERNAME: ${{ secrets.SYLVANAS_USERNAME }}
+          SYLVANAS_PASSWORD: ${{ secrets.SYLVANAS_PASSWORD }}
+        run: |
+          PAYLOAD=$(jq -n --arg u "$SYLVANAS_USERNAME" --arg p "$SYLVANAS_PASSWORD" \
+            '{username: $u, password: $p}')
+
+          RESPONSE=$(curl -s -X POST https://project-sylvanas.net/api/auth/login \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          TOKEN=$(echo "$RESPONSE" | jq -r '.token')
+
+          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
+            echo "::error::Login to Sylvanas failed"
+            exit 1
+          fi
+
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "Login successful"
+
+      - name: Upload plugin
+        env:
+          SYLVANAS_TOKEN: ${{ steps.login.outputs.token }}
+          SYLVANAS_PLUGIN_ID: ${{ secrets.SYLVANAS_PLUGIN_ID }}
+        run: |
+          echo "Uploading to Sylvanas (plugin $SYLVANAS_PLUGIN_ID)..."
+          HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" -X PUT \
+            -H "Authorization: Bearer $SYLVANAS_TOKEN" \
+            -F "plugin_file=@plugin.zip" \
+            "https://project-sylvanas.net/api/developer/plugin/$SYLVANAS_PLUGIN_ID/upload")
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Upload failed (HTTP $HTTP_CODE)"
+            cat response.json
+            exit 1
+          fi
+
+          SUCCESS=$(jq -r '.success' response.json)
+          if [ "$SUCCESS" != "true" ]; then
+            echo "::error::Upload rejected by Sylvanas"
+            cat response.json
+            exit 1
+          fi
+
+          echo "Upload successful"
+          echo "   Upload ID: $(jq -r '.uploads[0].id' response.json)"
+          echo "   Checksum:  $(jq -r '.uploads[0].checksum' response.json)"
