@@ -1,6 +1,7 @@
 local loaded_versions = {}
 local available_versions = nil
 local latest_version = nil
+local latest_major = nil
 local LIB_NAME = "ExampleLib"
 
 -- detect if we're in assembled mode (versions/ folder exists)
@@ -9,6 +10,7 @@ local function is_assembled()
     if ok then
         available_versions = index.versions
         latest_version = index.latest
+        latest_major = index.latest_major or {}
         return true
     end
     return false
@@ -40,6 +42,13 @@ _G[LIB_NAME] = function(caller, ver)
 
     if not explicit then
         core.log_warning(prefix .. "No version specified, using latest: " .. latest_version)
+    end
+
+    -- resolve major-only version (e.g. "1" -> "1.2.0")
+    if ver and not available_versions[ver] and latest_major[ver] then
+        local resolved = latest_major[ver]
+        core.log(prefix .. "Resolved major version " .. ver .. " to " .. resolved)
+        ver = resolved
     end
 
     if not ver or not available_versions[ver] then

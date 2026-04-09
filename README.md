@@ -42,8 +42,9 @@ That's it. The action picks up the tag, assembles all versions, and uploads to S
 
 ```lua
 -- caller name is required as first argument
-local lib = ExampleLib("MyCoolPlugin", "1.0.0")   -- load specific version
-local lib = ExampleLib("MyCoolPlugin")             -- latest (logs a warning)
+local lib = ExampleLib("MyCoolPlugin", "1.0.0")   -- exact version
+local lib = ExampleLib("MyCoolPlugin", "1")        -- latest within major 1 (e.g. 1.2.0)
+local lib = ExampleLib("MyCoolPlugin")             -- latest overall (logs a warning)
 
 lib:hello()
 -- logs: [MyCoolPlugin > ExampleLib] Hello from version: 1.0.0
@@ -52,6 +53,16 @@ lib:hello()
 The caller name is required so that all log messages from the library include the name of the plugin/CR that uses it. This makes it easy to trace errors back to the consumer.
 
 Different plugins can use different versions simultaneously -- each call returns its own instance with the caller identity attached.
+
+## Versioning
+
+This library uses [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
+
+- **PATCH** (`1.0.x`) — bug fixes, no API changes
+- **MINOR** (`1.x.0`) — new features, backwards compatible
+- **MAJOR** (`x.0.0`) — breaking changes
+
+Since minor and patch updates are backwards compatible, consumers can request just a major version (e.g. `"1"`) to always get the latest compatible release. Only bump major when you introduce breaking changes.
 
 ## Tag format
 

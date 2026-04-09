@@ -63,6 +63,18 @@ jobs:
         env:
           LATEST: ${{ steps.tags.outputs.latest }}
         run: |
+          # Build latest_major map: for each version, track the highest per major
+          declare -A MAJOR_MAP
+          for DIR in versions/*/; do
+            VER=$(basename "$DIR")
+            [ "$VER" = "index.lua" ] && continue
+            MAJOR=$(echo "$VER" | cut -d. -f1)
+            CURRENT=${MAJOR_MAP[$MAJOR]:-""}
+            if [ -z "$CURRENT" ] || printf '%s\n%s\n' "$CURRENT" "$VER" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | grep -q "^$VER$"; then
+              MAJOR_MAP[$MAJOR]="$VER"
+            fi
+          done
+
           {
             echo 'return {'
             echo "    latest = \"$LATEST\","
@@ -70,9 +82,15 @@ jobs:
 
             for DIR in versions/*/; do
               VER=$(basename "$DIR")
-              # Skip index.lua itself
               [ "$VER" = "index.lua" ] && continue
               echo "        [\"$VER\"] = true,"
+            done
+
+            echo '    },'
+            echo '    latest_major = {'
+
+            for MAJOR in "${!MAJOR_MAP[@]}"; do
+              echo "        [\"$MAJOR\"] = \"${MAJOR_MAP[$MAJOR]}\","
             done
 
             echo '    }'
